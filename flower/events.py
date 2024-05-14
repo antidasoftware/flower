@@ -28,29 +28,29 @@ def get_prometheus_metrics():
 
 class PrometheusMetrics:
     def __init__(self):
-        self.events = PrometheusCounter('flower_events_total', "Number of events", ['worker', 'type', 'task'])
+        self.events = PrometheusCounter('flower_events_total', "Number of events", ['worker', 'worker_base_name', 'type', 'task'])
 
         self.runtime = Histogram(
             'flower_task_runtime_seconds',
             "Task runtime",
-            ['worker', 'task'],
+            ['worker', 'worker_base_name', 'task'],
             buckets=options.task_runtime_metric_buckets
         )
         self.prefetch_time = Gauge(
             'flower_task_prefetch_time_seconds',
             "The time the task spent waiting at the celery worker to be executed.",
-            ['worker', 'task']
+            ['worker', 'worker_base_name', 'task']
         )
         self.number_of_prefetched_tasks = Gauge(
             'flower_worker_prefetched_tasks',
             'Number of tasks of given type prefetched at a worker',
-            ['worker', 'task']
+            ['worker', 'worker_base_name', 'task']
         )
-        self.worker_online = Gauge('flower_worker_online', "Worker online status", ['worker'])
+        self.worker_online = Gauge('flower_worker_online', "Worker online status", ['worker', 'worker_base_name'])
         self.worker_number_of_currently_executing_tasks = Gauge(
             'flower_worker_number_of_currently_executing_tasks',
             "Number of tasks currently executing at a worker",
-            ['worker']
+            ['worker', 'worker_base_name']
         )
 
 
@@ -67,6 +67,7 @@ class EventsState(State):
         super().event(event)
 
         worker_name = event['hostname']
+        worker_base_name = event['hostname'].split('@')[0]
         event_type = event['type']
 
         self.counter[worker_name][event_type] += 1
@@ -77,37 +78,37 @@ class EventsState(State):
             task_name = event.get('name', '')
             if not task_name and task_id in self.tasks:
                 task_name = task.name or ''
-            self.metrics.events.labels(worker_name, event_type, task_name).inc()
+            self.metrics.events.labels(worker_name, worker_base_name, event_type, task_name).inc()
 
             runtime = event.get('runtime', 0)
             if runtime:
-                self.metrics.runtime.labels(worker_name, task_name).observe(runtime)
+                self.metrics.runtime.labels(worker_name, worker_base_name, task_name).observe(runtime)
 
             task_started = task.started
             task_received = task.received
 
             if event_type == 'task-received' and not task.eta and task_received:
-                self.metrics.number_of_prefetched_tasks.labels(worker_name, task_name).inc()
+                self.metrics.number_of_prefetched_tasks.labels(worker_name, worker_base_name, task_name).inc()
 
             if event_type == 'task-started' and not task.eta and task_started and task_received:
-                self.metrics.prefetch_time.labels(worker_name, task_name).set(task_started - task_received)
-                self.metrics.number_of_prefetched_tasks.labels(worker_name, task_name).dec()
+                self.metrics.prefetch_time.labels(worker_name, worker_base_name, task_name).set(task_started - task_received)
+                self.metrics.number_of_prefetched_tasks.labels(worker_name, worker_base_name, task_name).dec()
 
             if event_type in ['task-succeeded', 'task-failed'] and not task.eta and task_started and task_received:
-                self.metrics.prefetch_time.labels(worker_name, task_name).set(0)
+                self.metrics.prefetch_time.labels(worker_name, worker_base_name, task_name).set(0)
 
         if event_type == 'worker-online':
-            self.metrics.worker_online.labels(worker_name).set(1)
+            self.metrics.worker_online.labels(worker_name, worker_base_name).set(1)
 
         if event_type == 'worker-heartbeat':
-            self.metrics.worker_online.labels(worker_name).set(1)
+            self.metrics.worker_online.labels(worker_name, worker_base_name).set(1)
 
             num_executing_tasks = event.get('active')
             if num_executing_tasks is not None:
-                self.metrics.worker_number_of_currently_executing_tasks.labels(worker_name).set(num_executing_tasks)
+                self.metrics.worker_number_of_currently_executing_tasks.labels(worker_name, worker_base_name).set(num_executing_tasks)
 
         if event_type == 'worker-offline':
-            self.metrics.worker_online.labels(worker_name).set(0)
+            self.metrics.worker_online.labels(worker_name, worker_base_name).set(0)
 
 
 class Events(threading.Thread):
